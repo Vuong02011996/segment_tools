@@ -5,3 +5,7 @@
 
 # Outof memory cuda
 + Add: torch.cuda.set_device(1)
+
+# RuntimeError: No available kernel. Aborting execution.
++ https://github.com/facebookresearch/segment-anything-2/issues/48
++ OLD_GPU, USE_FLASH_ATTN, MATH_KERNEL_ON = True, True, True

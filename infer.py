@@ -49,21 +49,22 @@ def show_points(coords, labels, ax, marker_size=200):
     ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)   
 
 # `video_dir` a directory of JPEG frames with filenames like `<frame_index>.jpg`
-video_dir = "/home/labelling/Project/segment-anything-2/data/test_video"
+# video_dir = "/home/labelling/Project/segment-anything-2/data/test_video"
+video_dir = "/home/labelling/Project/segment-anything-2/data/file_images"
 
 # scan all the JPEG frame names in this directory
 frame_names = [
     p for p in os.listdir(video_dir)
-    if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG"]
+    if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG", ".png"]
 ]
-frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+# frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
 
 # take a look the first video frame
 frame_idx = 0
 plt.figure(figsize=(12, 8))
 plt.title(f"frame {frame_idx}")
 plt.imshow(Image.open(os.path.join(video_dir, frame_names[frame_idx])))
-plt.show()
+# plt.show()
 
 inference_state = predictor.init_state(video_path=video_dir)
 
@@ -73,7 +74,7 @@ ann_frame_idx = 0  # the frame index we interact with
 ann_obj_id = 1  # give a unique id to each object we interact with (it can be any integers)
 
 # Let's add a positive click at (x, y) = (210, 350) to get started
-points = np.array([[160, 400]], dtype=np.float32)
+points = np.array([[1156, 430]], dtype=np.float32)
 # for labels, `1` means positive click and `0` means negative click
 labels = np.array([1], np.int32)
 _, out_obj_ids, out_mask_logits = predictor.add_new_points(
@@ -83,6 +84,18 @@ _, out_obj_ids, out_mask_logits = predictor.add_new_points(
     points=points,
     labels=labels,
 )
+
+# save the segmented image to a folder
+segmented_image = (out_mask_logits[0] > 0.0).cpu().numpy()
+segmented_image_path = "/home/labelling/Project/segment-anything-2/segmented_images"
+os.makedirs(segmented_image_path, exist_ok=True)
+image_name = frame_names[ann_frame_idx].split(".")[0] + "_segmented.jpg"
+image_path = os.path.join(segmented_image_path, image_name)
+Image.fromarray((segmented_image.squeeze() * 255).astype(np.uint8)).save(image_path)
+
+
+
+
 
 # show the results on the current (interacted) frame
 plt.figure(figsize=(12, 8))
@@ -101,7 +114,7 @@ for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(
     }
 
 # render the segmentation results every few frames
-vis_frame_stride = 15
+vis_frame_stride = 1
 plt.close("all")
 for out_frame_idx in range(0, len(frame_names), vis_frame_stride):
     plt.figure(figsize=(6, 4))

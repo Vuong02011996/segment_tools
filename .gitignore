@@ -10,3 +10,5 @@ outputs/*
 checkpoints/*.pt
 data/*
 checkpoints/data/*
+task.md
+
