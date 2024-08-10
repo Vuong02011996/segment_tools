@@ -7,3 +7,14 @@
 + Response output for cvat -> show and export format data to training
 + Timeout when infer long video.
 + How to deploy service with triton or nuclio
+
+# Format COCO
++ https://github.com/cvat-ai/cvat?tab=readme-ov-file
++ https://cocodataset.org/#format-data
+
++ Export data to coco format
++ Import data after format to cvat and test result.
+
+# Fix bug Error box after format to RLE
++ label by hand the same two object in model view result
++ using 

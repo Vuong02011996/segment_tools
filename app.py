@@ -5,11 +5,17 @@ import os
 import cv2
 import torch
 import matplotlib
+
+from my_utils.check_rle_format_2 import segmentation_to_mask_2, segmentation_to_mask_3
 matplotlib.use('WebAgg')
 import matplotlib.pyplot as plt
 
 from PIL import Image
 from sam2.build_sam import build_sam2_video_predictor
+import json
+from my_utils.utils import binary_mask_to_rle, binary_mask_to_uncompressed_rle, calculate_area_and_bbox, convert_rle_to_list, decompress_rle_string, show_mask, show_mask_binary, show_masks_comparison, show_points
+# https://github.com/cocodataset/cocoapi/tree/master/PythonAPI/pycocotools
+from pycocotools import mask as maskUtils
 
 # check cuda and init model
 # use bfloat16 for the entire notebook
@@ -27,34 +33,9 @@ sam2_checkpoint = "/home/labelling/Project/segment-anything-2/checkpoints/sam2_h
 model_cfg = "sam2_hiera_l.yaml"
 
 predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
-
+image_test_path = "/home/labelling/Project/segment-anything-2/data/"
 
 app = FastAPI()
-
-
-"""
-List api:
-+ given a positive point and image, return mask of objects (plus show mask to image and return image)
-+ given a negative point and image, return mask of objects (plus show mask to image and return image)
-+ 
-
-"""
-def show_mask(mask, ax, obj_id=None, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.6])], axis=0)
-    else:
-        cmap = plt.get_cmap("tab10")
-        cmap_idx = 0 if obj_id is None else obj_id
-        color = np.array([*cmap(cmap_idx)[:3], 0.6])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
-
-def show_points(coords, labels, ax, marker_size=200):
-    pos_points = coords[labels==1]
-    neg_points = coords[labels==0]
-    ax.scatter(pos_points[:, 0], pos_points[:, 1], color='green', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)
-    ax.scatter(neg_points[:, 0], neg_points[:, 1], color='red', marker='*', s=marker_size, edgecolor='white', linewidth=1.25)  
 
 
 @app.post("/segment_one_object")
@@ -185,21 +166,7 @@ def segment_multiple_objects(request: dict):
         print("image_masked: ", image_masked.shape)
         image_masked = image_masked > 0.0
 
-    # show the results on the current (interacted) frame on all objects
-    segmented_image_path = f"{video_dir}/mul_segmented_images"
-    os.makedirs(segmented_image_path, exist_ok=True)
-    plt.figure(figsize=(12, 8))
-    plt.title(f"frame {ann_frame_idx}")
-    plt.imshow(Image.open(os.path.join(video_dir, frame_names[ann_frame_idx])))
-    show_points(points, labels, plt.gca())
-    for i, out_obj_id in enumerate(out_obj_ids):
-        show_points(*prompts[out_obj_id], plt.gca())
-        show_mask((out_mask_logits[i] > 0.0).cpu().numpy(), plt.gca(), obj_id=out_obj_id)
-       # Save the masked image
-    result_image_with_point = f"{segmented_image_path}/result_{frame_names[ann_frame_idx]}"
-    plt.savefig(result_image_with_point)
-
-
+ 
     # run propagation throughout the video and collect the results in a dict
     video_segments = {}  # video_segments contains the per-frame segmentation results
     for out_frame_idx, out_obj_ids, out_mask_logits in predictor.propagate_in_video(inference_state):
@@ -208,23 +175,158 @@ def segment_multiple_objects(request: dict):
             for i, out_obj_id in enumerate(out_obj_ids)
         }
 
-    
-    # render the segmentation results every few frames
-    vis_frame_stride = 1
-    plt.close("all")
-    for out_frame_idx in range(0, len(frame_names), vis_frame_stride):
-        plt.figure(figsize=(6, 4))
-        plt.title(f"frame {out_frame_idx}")
-        plt.imshow(Image.open(os.path.join(video_dir, frame_names[out_frame_idx])))
-    
-        for out_obj_id, out_mask in video_segments[out_frame_idx].items():
-            show_mask(out_mask, plt.gca(), obj_id=out_obj_id)
+    # Convert the segmentation masks to COCO format
+    images = []
+    coco_annotations = []
+    for frame_idx, frame_name in enumerate(frame_names):
+        image_path = os.path.join(video_dir, frame_name)
+        image_id = frame_idx + 1
 
-        # Save the masked image
-        path_img_masked = f"{segmented_image_path}/result_video_{frame_names[out_frame_idx]}"
-        plt.savefig(path_img_masked)
+        # Load the image
+        image = Image.open(image_path)
+        width, height = image.size
+        width, height = width+1, height+1
+        images.append({"license": 0, 
+                       "id": image_id, 
+                       "width": width, 
+                       "height": height, 
+                       "file_name": frame_name,
+                       "flickr_url":"",
+                       "coco_url":"",
+                       "date_captured":0
+                       })
 
-    return {"result_image_have_point": result_image_with_point, "path_result": segmented_image_path}
+
+        # Get the segmentation masks for this frame
+        frame_masks = video_segments[frame_idx]
+
+        # Convert each mask to COCO format
+       
+        ann_id = 1
+        for obj_id, mask in frame_masks.items():
+            mask_binary = np.array(mask, dtype=np.uint8)
+            mask_binary = np.where(mask_binary > 0, 1, 0)
+
+            mask_for_rle = np.asfortranarray(mask_binary.astype(np.uint8))
+            mask_for_rle = np.squeeze(mask_for_rle)
+
+
+            # Convert the binary mask to RLE format
+            compressed_rle = maskUtils.encode(mask_for_rle)
+            # number_list = convert_rle_to_list(compressed_rle["counts"])
+
+                        # Create a figure and axes
+            fig, axes = plt.subplots(1, 3, figsize=(10, 5))
+
+            # Show actual mask
+            axes[0].imshow(maskUtils.decode(compressed_rle))
+            axes[0].set_title('Real segmentation')
+            axes[0].axis('off')
+
+            # Show output of suggested fix
+            axes[1].imshow(segmentation_to_mask_2(compressed_rle, canvas_size=(height,width)))
+            axes[1].set_title('Output_2')
+            axes[1].axis('off')
+
+            # # Show output of suggested fix
+            # axes[2].imshow(segmentation_to_mask_3(compressed_rle, canvas_size=(height,width)))
+            # axes[2].set_title('Output_3')
+            # axes[2].axis('off')
+
+            # Adjust layout
+            plt.tight_layout()
+
+            # Show the images
+            path_img_masked = f"{image_test_path}test_format_2.png"
+            plt.savefig(path_img_masked)
+
+            decompressed_rles, heights, widths = maskUtils.decompress([compressed_rle])
+
+            # Calculate uncompressed_counts, area and bounding box manually C1
+            uncompressed_counts = binary_mask_to_uncompressed_rle(mask_binary)
+            area, bbox = calculate_area_and_bbox(mask_binary)
+
+            # Calculate uncompressed_counts, area and bounding box manually C2
+            rle = binary_mask_to_rle(mask_for_rle)
+            # Create the COCO annotation
+            annotation = {
+                "id": ann_id,
+                "image_id": image_id,
+                "category_id": obj_id,
+                "segmentation": rle,
+                # "segmentation": {
+                #     # "counts": uncompressed_counts,
+                #     "counts": decompressed_rles[0],
+                #     # "size": [mask.shape[1], mask.shape[2]] # height, width of the mask
+                #     "size": [height, width] # height, width of the mask
+                # },
+                "area": int(maskUtils.area(compressed_rle)), # int(mask.sum())
+                "bbox": maskUtils.toBbox(compressed_rle).tolist(),
+                # "area": area, # int(mask.sum())
+                # "bbox": bbox,
+                "iscrowd": 1,
+                "attributes": {
+                "occluded": False
+                }
+            }
+
+            # Add the annotation to the list
+            coco_annotations.append(annotation)
+            ann_id += 1
+
+    # Create the COCO annotation file
+    coco_data = {
+                "info": {"year": 2021, "version": "2021", "description": "zjx", "contributor": "zjx", "url": "",
+                        "date_created": "2021.07.06"},
+                "categories": [],
+                "license": {"id": 1, "url": "", "name": "zhangjiaxin"},
+                "images": images,
+                "annotations": coco_annotations
+            }
+    
+    # Add the image information to the COCO data
+    # Add categories to the COCO data
+    # class_index = {1: "building"}
+    # for s, k in enumerate(list(class_index.keys())):
+    #     coco_data["categories"].append({"id": k, "name": class_index[k], "supercategory": "building"})
+
+    categories = [
+        {
+            "id": 1,
+            "name": "Edge",
+            "supercategory": ""
+        },
+        {
+            "id": 2,
+            "name": "Mobility",
+            "supercategory": ""
+        },
+        {
+            "id": 3,
+            "name": "Obstacle",
+            "supercategory": ""
+        },
+        {
+            "id": 4,
+            "name": "Insecure-zone",
+            "supercategory": ""
+        },
+        {
+            "id": 5,
+            "name": "free-space",
+            "supercategory": ""
+        }
+    ]
+    coco_data["categories"] = categories
+    
+    # Save the COCO annotation file
+    data_import_path = "/home/labelling/Project/segment-anything-2/"
+    coco_file_path = os.path.join(data_import_path, "instances_test.json")
+    with open(coco_file_path, "w") as f:
+        json.dump(coco_data, f)
+
+    return { "coco_file_path": coco_file_path}
+
 
 
 
