@@ -1,19 +1,21 @@
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 import uvicorn
 import numpy as np
+import shutil
 import os
-import cv2
+import re
 import torch
 import matplotlib
-
-from my_utils.check_rle_format_2 import segmentation_to_mask_2, segmentation_to_mask_3
+from utils_code.read_video_file import extract_frames
 matplotlib.use('WebAgg')
 import matplotlib.pyplot as plt
+from fastapi.middleware.cors import CORSMiddleware
 
 from PIL import Image
 from sam2.build_sam import build_sam2_video_predictor
 import json
-from my_utils.utils import binary_mask_to_rle, binary_mask_to_uncompressed_rle, calculate_area_and_bbox, convert_rle_to_list, decompress_rle_string, show_mask, show_mask_binary, show_masks_comparison, show_points
+from utils_code.utils import binary_mask_to_rle, show_mask, show_points
 # https://github.com/cocodataset/cocoapi/tree/master/PythonAPI/pycocotools
 from pycocotools import mask as maskUtils
 
@@ -33,10 +35,16 @@ sam2_checkpoint = "/home/labelling/Project/segment-anything-2/checkpoints/sam2_h
 model_cfg = "sam2_hiera_l.yaml"
 
 predictor = build_sam2_video_predictor(model_cfg, sam2_checkpoint)
-image_test_path = "/home/labelling/Project/segment-anything-2/data/"
-
 app = FastAPI()
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://vizo.tanika.ai"],  
+    # allow_origins=["*"],  
+    allow_credentials=True,
+    # allow_methods=["*"],  
+    allow_methods=["DELETE", "GET", "POST", "PUT"],
+    allow_headers=["*"],  
+)
 
 @app.post("/segment_one_object")
 def segment_one_object(request: dict):
@@ -59,6 +67,9 @@ def segment_one_object(request: dict):
         p for p in os.listdir(video_dir)
         if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG", ".png"]
     ]
+
+    # Sort using the numeric part extracted from the filename
+    # frame_names.sort(key=lambda p: int(re.search(r'\d+', p).group()))
     frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
 
     # SAM 2 requires stateful inference for interactive video segmentation, so we need to initialize an inference state on this video.
@@ -127,24 +138,60 @@ def segment_multiple_objects(request: dict):
     mul_points = request.get("points")
     mul_labels = request.get("labels")
     ann_obj_ids = request.get("ann_obj_ids")
-
     frame_idx = request.get("frame_idx")
-    video_dir = request.get("video_dir")
+    video_link = request.get("video_dir")
+    auto_from_to = request.get("auto_from_to") # [0, 482]
     print("mul_points: ", mul_points)
     print("mul_labels: ", mul_labels)
     print("ann_obj_ids: ", ann_obj_ids)
     print("frame_idx: ", frame_idx)
-    print("video_dir: ", video_dir)
+    print("video_link: ", video_link)
+    print("auto_from_to: ", auto_from_to)
+
+
+    # frame_folder = '/home/labelling/Project/segment-anything-2/data/file_images'
+    frame_folder_test = '/home/labelling/Project/segment-anything-2/data/test_frame_folders_test'
+    extract_frames(video_link, frame_folder_test)
 
     # scan all the JPEG frame names in this directory
     frame_names = [
-        p for p in os.listdir(video_dir)
+        p for p in os.listdir(frame_folder_test)
         if os.path.splitext(p)[-1] in [".jpg", ".jpeg", ".JPG", ".JPEG", ".png"]
     ]
-    frame_names.sort(key=lambda p: int(os.path.splitext(p)[0]))
+    
+
+    # Sort using the numeric part extracted from the filename
+    frame_names.sort(key=lambda p: int(re.search(r'\d+', p).group()))
+    # frame_names.sort(key=lambda p: int(os.path.splitext(p)[0][6:]))
+    
+    frame_names = frame_names[:10]
+
+    # Define source and destination directories
+    src_dir = frame_folder_test
+    dst_dir = '/home/labelling/Project/segment-anything-2/data/test_frame_folders_test2'
+    # Check if the directory exists
+    if os.path.exists(dst_dir):
+        # Delete the directory and its contents
+        shutil.rmtree(dst_dir)
+        print(f"Directory {dst_dir} has been deleted.")
+    else:
+        print(f"Directory {dst_dir} does not exist.")
+
+    # Create destination directory if it doesn't exist
+    os.makedirs(dst_dir, exist_ok=True)
+
+    # Copy files and rename them
+    print(frame_names)
+    for filename in os.listdir(src_dir):
+        if filename.startswith('frame_'):
+            # print("filename: ", filename)
+            if filename in frame_names:
+                new_filename = filename.replace('frame_', '', 1)
+                shutil.copy(os.path.join(src_dir, filename), os.path.join(dst_dir, new_filename))
+    
 
     # SAM 2 requires stateful inference for interactive video segmentation, so we need to initialize an inference state on this video.
-    inference_state = predictor.init_state(video_path=video_dir)
+    inference_state = predictor.init_state(video_path=dst_dir)
 
     prompts = {}
     for i , ann_obj_id in enumerate(ann_obj_ids):
@@ -179,29 +226,12 @@ def segment_multiple_objects(request: dict):
     images = []
     coco_annotations = []
     for frame_idx, frame_name in enumerate(frame_names):
-        image_path = os.path.join(video_dir, frame_name)
+        # image_path = os.path.join(video_dir, frame_name)
         image_id = frame_idx + 1
-
-        # Load the image
-        image = Image.open(image_path)
-        width, height = image.size
-        width, height = width+1, height+1
-        images.append({"license": 0, 
-                       "id": image_id, 
-                       "width": width, 
-                       "height": height, 
-                       "file_name": frame_name,
-                       "flickr_url":"",
-                       "coco_url":"",
-                       "date_captured":0
-                       })
-
-
         # Get the segmentation masks for this frame
         frame_masks = video_segments[frame_idx]
 
         # Convert each mask to COCO format
-       
         ann_id = 1
         for obj_id, mask in frame_masks.items():
             mask_binary = np.array(mask, dtype=np.uint8)
@@ -210,42 +240,10 @@ def segment_multiple_objects(request: dict):
             mask_for_rle = np.asfortranarray(mask_binary.astype(np.uint8))
             mask_for_rle = np.squeeze(mask_for_rle)
 
-
             # Convert the binary mask to RLE format
             compressed_rle = maskUtils.encode(mask_for_rle)
-            # number_list = convert_rle_to_list(compressed_rle["counts"])
 
-                        # Create a figure and axes
-            fig, axes = plt.subplots(1, 3, figsize=(10, 5))
-
-            # Show actual mask
-            axes[0].imshow(maskUtils.decode(compressed_rle))
-            axes[0].set_title('Real segmentation')
-            axes[0].axis('off')
-
-            # Show output of suggested fix
-            axes[1].imshow(segmentation_to_mask_2(compressed_rle, canvas_size=(height,width)))
-            axes[1].set_title('Output_2')
-            axes[1].axis('off')
-
-            # # Show output of suggested fix
-            # axes[2].imshow(segmentation_to_mask_3(compressed_rle, canvas_size=(height,width)))
-            # axes[2].set_title('Output_3')
-            # axes[2].axis('off')
-
-            # Adjust layout
-            plt.tight_layout()
-
-            # Show the images
-            path_img_masked = f"{image_test_path}test_format_2.png"
-            plt.savefig(path_img_masked)
-
-            decompressed_rles, heights, widths = maskUtils.decompress([compressed_rle])
-
-            # Calculate uncompressed_counts, area and bounding box manually C1
-            uncompressed_counts = binary_mask_to_uncompressed_rle(mask_binary)
-            area, bbox = calculate_area_and_bbox(mask_binary)
-
+            # decompressed_rles, heights, widths = maskUtils.decompress([compressed_rle])
             # Calculate uncompressed_counts, area and bounding box manually C2
             rle = binary_mask_to_rle(mask_for_rle)
             # Create the COCO annotation
@@ -254,16 +252,8 @@ def segment_multiple_objects(request: dict):
                 "image_id": image_id,
                 "category_id": obj_id,
                 "segmentation": rle,
-                # "segmentation": {
-                #     # "counts": uncompressed_counts,
-                #     "counts": decompressed_rles[0],
-                #     # "size": [mask.shape[1], mask.shape[2]] # height, width of the mask
-                #     "size": [height, width] # height, width of the mask
-                # },
                 "area": int(maskUtils.area(compressed_rle)), # int(mask.sum())
                 "bbox": maskUtils.toBbox(compressed_rle).tolist(),
-                # "area": area, # int(mask.sum())
-                # "bbox": bbox,
                 "iscrowd": 1,
                 "attributes": {
                 "occluded": False
@@ -273,13 +263,35 @@ def segment_multiple_objects(request: dict):
             # Add the annotation to the list
             coco_annotations.append(annotation)
             ann_id += 1
-
+    
+            images.append({"license": 0, 
+                       "id": image_id, 
+                       "width": rle['size'][1], 
+                       "height":  rle['size'][0], 
+                       "file_name": frame_name,
+                       "flickr_url":"",
+                       "coco_url":"",
+                       "date_captured":0
+                       })
+            
     # Create the COCO annotation file
     coco_data = {
-                "info": {"year": 2021, "version": "2021", "description": "zjx", "contributor": "zjx", "url": "",
-                        "date_created": "2021.07.06"},
+                "licenses": [
+                    {
+                        "name": "",
+                        "id": 0,
+                        "url": ""
+                    }
+                ],
+                "info": {
+                    "contributor": "",
+                    "date_created": "",
+                    "description": "",
+                    "url": "",
+                    "version": "",
+                    "year": ""
+                },
                 "categories": [],
-                "license": {"id": 1, "url": "", "name": "zhangjiaxin"},
                 "images": images,
                 "annotations": coco_annotations
             }
@@ -320,13 +332,13 @@ def segment_multiple_objects(request: dict):
     coco_data["categories"] = categories
     
     # Save the COCO annotation file
-    data_import_path = "/home/labelling/Project/segment-anything-2/"
-    coco_file_path = os.path.join(data_import_path, "instances_test.json")
-    with open(coco_file_path, "w") as f:
-        json.dump(coco_data, f)
+    # data_import_path = "/home/labelling/Project/segment-anything-2/"
+    # coco_file_path = os.path.join(data_import_path, "instances_test.json")
+    # with open(coco_file_path, "w") as f:
+    #     json.dump(coco_data, f)
 
-    return { "coco_file_path": coco_file_path}
-
+    # return { "coco_file_path": coco_file_path}
+    return coco_data
 
 
 
@@ -336,10 +348,3 @@ def read_root():
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=5959)
-
-    """
-    Output models:
-    out_mask_logits: the predicted mask logits for each object, auto appended with each new point added in loop
-        + out_mask_logits[i] shape [1, 811, 1444](c, h, w) is the mask logits for the i-th object
-        + < 0.0
-    """
