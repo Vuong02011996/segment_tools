@@ -18,3 +18,7 @@
 # Fix bug Error box after format to RLE
 + label by hand the same two object in model view result
 + using 
+
+# How to run video with SAM2 and export to json file
++ Wrire function:  Read video by ffmpeg, save to folder, file name ...
++ get folder run 

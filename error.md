@@ -25,3 +25,19 @@
         return _mask.decompress([rleObjs])[0]
 
 + pip install cython did the trick for me
+
+# Error up bouding box len bi sai
++ do height, width trong field `images` with size in `segmentation` khong giong nhau
+
+# Error CORS
+```
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "https://vizo.tanika.ai"],  
+    # allow_origins=["*"],  
+    allow_credentials=True,
+    # allow_methods=["*"],  
+    allow_methods=["DELETE", "GET", "POST", "PUT"],
+    allow_headers=["*"],  
+)
+```

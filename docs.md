@@ -62,3 +62,14 @@ https://github.com/cvat-ai/cvat/blob/develop/cvat/apps/dataset_manager/formats/t
 # Using polygon format
 + Code export json COCO format example but using polygon: 
 https://github.com/Mortyzhang/Mask2polygon_tool/blob/main/Mask2polygon.py
+
+# Convert binary mask to uncompress RLE coco format
++ https://stackoverflow.com/questions/49494337/encode-numpy-array-using-uncompressed-rle-for-coco-dataset
+
+# Other
+    """
+    Output models:
+    out_mask_logits: the predicted mask logits for each object, auto appended with each new point added in loop
+        + out_mask_logits[i] shape [1, 811, 1444](c, h, w) is the mask logits for the i-th object
+        + < 0.0
+    """

@@ -10,13 +10,13 @@ outputs/*
 checkpoints/*.pt
 data/*
 checkpoints/data/*
-task.md
-error.md
+# task.md
+# error.md
 *.zip
 *.tar.gz
 *.json
 Data_import_test/*
-Run_Project.md
-docs.md
+# Run_Project.md
+# docs.md
 
 
